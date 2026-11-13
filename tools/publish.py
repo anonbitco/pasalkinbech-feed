@@ -3,8 +3,10 @@
 
 Usage: python3 -I tools/publish.py [--push]
 
-Reads the newest ~/Downloads/pkb-<run>.json written by tools/extract.js, moves that
-run's photos into images/, and cleans every pkb-* file out of ~/Downloads.
+Reads the newest ~/Downloads/pkb-<run>.json written by tools/extract.js and copies that
+run's photos into images/. Chrome can only save into ~/Downloads itself, so afterwards
+every pkb-* file there is moved into ~/Downloads/पसल किनबेच Facebook/<date time>/,
+one folder per run, for the user to keep or delete.
 
 posts.json uses the Graph API `/{page}/posts` shape the app already reads:
   {"data": [{"id", "message", "full_picture", "pictures", "permalink_url", "created_time"}]}
@@ -34,6 +36,7 @@ def post_id(text):
 
 
 DOWNLOADS = os.path.expanduser("~/Downloads")
+ARCHIVE = os.path.join(DOWNLOADS, "पसल किनबेच Facebook")
 
 
 def take_image(filename):
@@ -94,8 +97,11 @@ def main():
         if f not in used and not f.startswith("."):
             os.remove(os.path.join(IMAGES, f))
 
+    run_dir = os.path.join(ARCHIVE, datetime.now().strftime("%Y-%m-%d %H.%M"))
+    os.makedirs(run_dir, exist_ok=True)
     for f in glob.glob(os.path.join(DOWNLOADS, "pkb-*")):
-        os.remove(f)
+        shutil.move(f, os.path.join(run_dir, os.path.basename(f)))
+    print("files kept in", run_dir)
 
     print(f"{len(fresh)} scraped, {added} new, {len(data)} in feed")
     if "--push" in sys.argv:

@@ -3,6 +3,7 @@
 //   pkb-<run>.json            {run, posts:[{text, link, files:[...]}]}
 //   pkb-<run>-<post>-<n>.jpg  each post's photos (Facebook's own links expire)
 // and returns a short summary. Then: python3 -I tools/publish.py --push
+// (which moves these files into ~/Downloads/पसल किनबेच Facebook/<date time>/).
 // Facebook's markup changes often; if this finds 0 posts, the selectors are the place to look.
 await (async () => {
   const sleep = ms => new Promise(r => setTimeout(r, ms));
