@@ -101,7 +101,7 @@ def main():
     if "--push" in sys.argv:
         subprocess.run(["git", "-C", ROOT, "add", "-A"], check=True)
         if subprocess.run(["git", "-C", ROOT, "diff", "--cached", "--quiet"]).returncode:
-            subprocess.run(["git", "-C", ROOT, "commit", "-qm", f"Feed update {now}: {added} new"], check=True)
+            subprocess.run(["git", "-C", ROOT, "commit", "-qm", f"Feed update {now}: {added} new\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"], check=True)
             subprocess.run(["git", "-C", ROOT, "push", "-q", "origin", "main"], check=True)
             print("pushed")
         else:
