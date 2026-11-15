@@ -5,7 +5,7 @@ Usage: python3 -I tools/publish.py [--push]
 
 Chrome can only save into ~/Downloads itself, so the FIRST thing this does is move every
 pkb-* file there into ~/Downloads/पसल किनबेच Facebook/<date time>/, one folder per run
-(named from when that run was saved). Nothing is left loose in Downloads, even if a later
+(named from when that run was saved), and folders older than KEEP_DAYS (7) are deleted. Nothing is left loose in Downloads, even if a later
 step such as git fails. It then builds the feed from the newest run folder.
 
 Run it with DEVELOPER_DIR=/Library/Developer/CommandLineTools so an Xcode update waiting for
@@ -17,7 +17,7 @@ Facebook's own image links expire after a few days, so every photo is downloaded
 images/ and served from this repo instead.
 """
 import glob, hashlib, json, os, shutil, subprocess, sys
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 FEED = os.path.join(ROOT, "posts.json")
@@ -48,6 +48,7 @@ def post_id(text):
 
 DOWNLOADS = os.path.expanduser("~/Downloads")
 ARCHIVE = os.path.join(DOWNLOADS, "पसल किनबेच Facebook")
+KEEP_DAYS = 7  # run folders older than this are deleted; the published feed lives in the repo
 
 
 def archive_downloads():
@@ -69,6 +70,29 @@ def archive_downloads():
             shutil.move(f, os.path.join(run_dir, os.path.basename(f)))
             moved += 1
     return moved
+
+
+def prune_archive(newest):
+    """Deletes run folders (and unsorted strays) older than KEEP_DAYS, never the newest run."""
+    cutoff = datetime.now() - timedelta(days=KEEP_DAYS)
+    removed = []
+    for d in glob.glob(os.path.join(ARCHIVE, "*")):
+        name = os.path.basename(d)
+        if not os.path.isdir(d) or d == newest:
+            continue
+        if name == "unsorted":
+            for f in glob.glob(os.path.join(d, "pkb-*")):
+                if datetime.fromtimestamp(os.path.getmtime(f)) < cutoff:
+                    os.remove(f)
+            continue
+        try:
+            stamp = datetime.strptime(name, "%Y-%m-%d %H.%M")  # only folders this script created
+        except ValueError:
+            continue
+        if stamp < cutoff and all(os.path.basename(f).startswith("pkb-") for f in os.listdir(d)):
+            shutil.rmtree(d)
+            removed.append(name)
+    return removed
 
 
 def newest_run():
@@ -95,6 +119,9 @@ def main():
         sys.exit("No scraped run found: run tools/extract.js first")
     run_dir = os.path.dirname(run_json)
     print("building feed from", run_dir)
+    removed = prune_archive(run_dir)
+    if removed:
+        print(f"deleted run folders older than {KEEP_DAYS} days:", ", ".join(removed))
     if "--push" in sys.argv:
         git("pull", "-q", "--rebase", "--autostash")
     scraped = json.load(open(run_json))["posts"]
