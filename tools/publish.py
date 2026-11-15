@@ -3,10 +3,13 @@
 
 Usage: python3 -I tools/publish.py [--push]
 
-Reads the newest ~/Downloads/pkb-<run>.json written by tools/extract.js and copies that
-run's photos into images/. Chrome can only save into ~/Downloads itself, so afterwards
-every pkb-* file there is moved into ~/Downloads/पसल किनबेच Facebook/<date time>/,
-one folder per run, for the user to keep or delete.
+Chrome can only save into ~/Downloads itself, so the FIRST thing this does is move every
+pkb-* file there into ~/Downloads/पसल किनबेच Facebook/<date time>/, one folder per run
+(named from when that run was saved). Nothing is left loose in Downloads, even if a later
+step such as git fails. It then builds the feed from the newest run folder.
+
+Run it with DEVELOPER_DIR=/Library/Developer/CommandLineTools so an Xcode update waiting for
+its licence to be accepted can't block python3 or git.
 
 posts.json uses the Graph API `/{page}/posts` shape the app already reads:
   {"data": [{"id", "message", "full_picture", "pictures", "permalink_url", "created_time"}]}
@@ -24,8 +27,16 @@ PAGE_URL = "https://www.facebook.com/pasalkinbech.com.np"
 KEEP = 80  # newest posts kept in the feed
 
 
+GIT_ENV = dict(os.environ, DEVELOPER_DIR="/Library/Developer/CommandLineTools") \
+    if os.path.isdir("/Library/Developer/CommandLineTools") else None
+
+
+def git(*args, check=True, **kw):
+    return subprocess.run(["git", "-C", ROOT, *args], env=GIT_ENV, check=check, **kw)
+
+
 def repo_slug():
-    url = subprocess.run(["git", "-C", ROOT, "remote", "get-url", "origin"], capture_output=True, text=True).stdout.strip()
+    url = git("remote", "get-url", "origin", capture_output=True, text=True).stdout.strip()
     return url.removesuffix(".git").split("github.com/")[-1].lstrip(":")
 
 
@@ -39,9 +50,35 @@ DOWNLOADS = os.path.expanduser("~/Downloads")
 ARCHIVE = os.path.join(DOWNLOADS, "पसल किनबेच Facebook")
 
 
-def take_image(filename):
-    """Moves a downloaded photo into images/, named by content so repeats dedupe."""
-    src = os.path.join(DOWNLOADS, os.path.basename(filename))
+def archive_downloads():
+    """Moves every pkb-* file out of ~/Downloads into one dated folder per run."""
+    moved = 0
+    for js in glob.glob(os.path.join(DOWNLOADS, "pkb-*.json")):
+        run = os.path.basename(js)[4:-5]
+        stamp = datetime.fromtimestamp(os.path.getmtime(js)).strftime("%Y-%m-%d %H.%M")
+        run_dir = os.path.join(ARCHIVE, stamp)
+        os.makedirs(run_dir, exist_ok=True)
+        for f in [js] + glob.glob(os.path.join(DOWNLOADS, f"pkb-{run}-*")):
+            shutil.move(f, os.path.join(run_dir, os.path.basename(f)))
+            moved += 1
+    strays = glob.glob(os.path.join(DOWNLOADS, "pkb-*"))  # photos whose run file never arrived
+    if strays:
+        run_dir = os.path.join(ARCHIVE, "unsorted")
+        os.makedirs(run_dir, exist_ok=True)
+        for f in strays:
+            shutil.move(f, os.path.join(run_dir, os.path.basename(f)))
+            moved += 1
+    return moved
+
+
+def newest_run():
+    runs = glob.glob(os.path.join(ARCHIVE, "*", "pkb-*.json"))
+    return max(runs, key=os.path.getmtime) if runs else None
+
+
+def take_image(run_dir, filename):
+    """Copies a downloaded photo into images/, named by content so repeats dedupe."""
+    src = os.path.join(run_dir, os.path.basename(filename))
     with open(src, "rb") as f:
         data = f.read()
     if not (data[:3] == b"\xff\xd8\xff" or data[:8] == b"\x89PNG\r\n\x1a\n" or data[8:12] == b"WEBP"):
@@ -52,11 +89,15 @@ def take_image(filename):
 
 
 def main():
-    runs = sorted(glob.glob(os.path.join(DOWNLOADS, "pkb-*.json")), key=os.path.getmtime)
-    runs = [r for r in runs if not os.path.basename(r).count("-") > 1]
-    if not runs:
-        sys.exit("No pkb-<run>.json in ~/Downloads: run tools/extract.js first")
-    scraped = json.load(open(runs[-1]))["posts"]
+    print(f"moved {archive_downloads()} files out of Downloads into {ARCHIVE}")
+    run_json = newest_run()
+    if not run_json:
+        sys.exit("No scraped run found: run tools/extract.js first")
+    run_dir = os.path.dirname(run_json)
+    print("building feed from", run_dir)
+    if "--push" in sys.argv:
+        git("pull", "-q", "--rebase", "--autostash")
+    scraped = json.load(open(run_json))["posts"]
     existing = json.load(open(FEED))["data"] if os.path.exists(FEED) else []
     by_id = {p["id"]: p for p in existing}
     raw = RAW.format(repo=repo_slug())
@@ -72,7 +113,7 @@ def main():
         pics = []
         for f in s.get("files", []):
             try:
-                pics.append(raw + take_image(f))
+                pics.append(raw + take_image(run_dir, f))
             except Exception as e:
                 print("image skipped:", e, file=sys.stderr)
         if not pics and old:
@@ -97,18 +138,12 @@ def main():
         if f not in used and not f.startswith("."):
             os.remove(os.path.join(IMAGES, f))
 
-    run_dir = os.path.join(ARCHIVE, datetime.now().strftime("%Y-%m-%d %H.%M"))
-    os.makedirs(run_dir, exist_ok=True)
-    for f in glob.glob(os.path.join(DOWNLOADS, "pkb-*")):
-        shutil.move(f, os.path.join(run_dir, os.path.basename(f)))
-    print("files kept in", run_dir)
-
     print(f"{len(fresh)} scraped, {added} new, {len(data)} in feed")
     if "--push" in sys.argv:
-        subprocess.run(["git", "-C", ROOT, "add", "-A"], check=True)
-        if subprocess.run(["git", "-C", ROOT, "diff", "--cached", "--quiet"]).returncode:
-            subprocess.run(["git", "-C", ROOT, "commit", "-qm", f"Feed update {now}: {added} new\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"], check=True)
-            subprocess.run(["git", "-C", ROOT, "push", "-q", "origin", "main"], check=True)
+        git("add", "-A")
+        if git("diff", "--cached", "--quiet", check=False).returncode:
+            git("commit", "-qm", f"Feed update {now}: {added} new\n\nCo-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>")
+            git("push", "-q", "origin", "main")
             print("pushed")
         else:
             print("no changes")
