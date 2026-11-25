@@ -100,6 +100,17 @@ def newest_run():
     return max(runs, key=os.path.getmtime) if runs else None
 
 
+def fb_time(iso):
+    """extract.js's ISO time (from Facebook's "52m" / "Yesterday" / "November 18" stamps) in Graph API form."""
+    if not iso:
+        return None
+    try:
+        t = datetime.fromisoformat(iso.replace("Z", "+00:00")).astimezone(timezone.utc)
+    except ValueError:
+        return None
+    return t.strftime("%Y-%m-%dT%H:%M:%S+0000")
+
+
 def take_image(run_dir, filename):
     """Copies a downloaded photo into images/, named by content so repeats dedupe."""
     src = os.path.join(run_dir, os.path.basename(filename))
@@ -151,12 +162,12 @@ def main():
             "full_picture": pics[0] if pics else None,
             "pictures": pics,
             "permalink_url": s.get("link") or (old or {}).get("permalink_url") or PAGE_URL,
-            "created_time": (old or {}).get("created_time") or now,
+            "created_time": fb_time(s.get("time")) or (old or {}).get("created_time") or now,
         })
         added += old is None
 
-    # Scraped posts come newest first; previously seen posts that weren't re-scraped follow.
-    data = (fresh + list(by_id.values()))[:KEEP]
+    # Newest first by when Facebook says each post was made (or when it was first seen).
+    data = sorted(fresh + list(by_id.values()), key=lambda p: p["created_time"], reverse=True)[:KEEP]
     json.dump({"data": data, "updated": now}, open(FEED, "w"), ensure_ascii=False, indent=1)
 
     # Drop photos no longer referenced by any post.
